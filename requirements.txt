@@ -1,0 +1,7 @@
+streamlit
+pdfplumber
+scikit-learn
+sentence-transformers
+torch
+torchvision
+matplotlib

@@ -1,10 +1,10 @@
-#  AI CV Screening and Job Matching System
+# 📄 AI CV Screening and Job Matching System
 
- Built with Python, NLP, and Machine Learning
+🚀 Built with Python, NLP, and Machine Learning
 
 ---
 
-##  Overview
+## 📌 Overview
 
 This project is an AI-powered CV screening system that evaluates how well a candidate’s CV matches a job description using both **keyword-based matching** and **semantic similarity techniques**.
 
@@ -74,7 +74,7 @@ AI-CV-Screening-System/
 │   └── final_matcher.py
 │
 ├── data/
-│   ├── resumes/
+│   ├── resumes/            # (ignored for privacy)
 │   └── job_descriptions/
 │
 ├── images/

@@ -37,14 +37,6 @@ It helps identify:
 - PDFPlumber
 - Matplotlib
 
----
-
-## 📊 Demo
-
-![App Screenshot](images/demo.png)
-
----
-
 ## 📈 How It Works
 
 1. Upload a CV (PDF format)

@@ -24,6 +24,8 @@ pip install -r requirements.txt
 streamlit run app/streamlit_app.py
 ```
 
+Open [http://localhost:8501](http://localhost:8501).
+
 Upload a PDF, DOCX, or TXT CV, or paste the text. Paste the job description and choose Analyse CV.
 
 Score one file from the terminal:

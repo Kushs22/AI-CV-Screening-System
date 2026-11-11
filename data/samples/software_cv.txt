@@ -1,0 +1,16 @@
+Priya Shah
+Software Engineer
+priya.shah@example.com
+
+Experience
+Platform Engineer, Northwind
+January 2018 - December 2024
+Built REST APIs in Java with Spring Boot.
+Wrote unit tests and reviewed pull requests.
+Deployed services on Kubernetes.
+
+Skills
+Java, Spring Boot, SQL, Git
+
+Education
+BSc Computer Science

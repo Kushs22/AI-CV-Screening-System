@@ -15,6 +15,7 @@ STOPWORDS = frozenset(
     a an the and or of to in on for with by from at as into over per via
     be is are was were been being this that these those we you they our your
     their who which what how when where while than then not no nor
+    have has had
     such other any all can will should must may
     """.split()
 )
@@ -166,6 +167,8 @@ ALIAS_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "customer",
             "clients",
             "client",
+            "guests",
+            "guest",
         ),
     ),
     ("adaptable", ("adaptability", "adaptable", "flexible")),
@@ -195,7 +198,59 @@ ALIAS_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("typescript", ("typescript",)),
     ("kubernetes", ("kubernetes", "k8s")),
     ("registered_nurse", ("registered nurse", "rn")),
-    ("customer_service", ("customer service", "client service")),
+    (
+        "customer_service",
+        (
+            "customer service",
+            "client service",
+            "guest service",
+            "customer facing",
+            "served customers",
+            "serving customers",
+            "served guests",
+            "serving guests",
+        ),
+    ),
+    (
+        "questions",
+        (
+            "answering questions",
+            "answered questions",
+            "answer questions",
+            "questions",
+            "question",
+            "queries",
+            "query",
+        ),
+    ),
+    (
+        "concerns",
+        (
+            "addressing concerns",
+            "addressed concerns",
+            "concerns",
+            "concern",
+            "complaints",
+            "complaint",
+        ),
+    ),
+    (
+        "cleanliness",
+        (
+            "cleanliness",
+            "cleaning",
+            "cleaned",
+            "clean",
+        ),
+    ),
+    (
+        "hygiene",
+        (
+            "food hygiene",
+            "hygienic",
+            "hygiene",
+        ),
+    ),
     ("health_safety", ("health and safety",)),
     ("forklift", ("fork lift", "forklift", "flt")),
     ("project_management", ("project management",)),
@@ -309,20 +364,48 @@ def _strip_suffix(word: str) -> str:
     return word
 
 
-def tokenize(text: str) -> list[str]:
-    """Canonical tokens for one requirement or one CV line."""
+def aliased_tokens(text: str, keep_joins: bool = False) -> list[str]:
+    """Canonical tokens for one requirement or one CV line.
+
+    ``and`` and ``or`` are kept only when a caller needs to see which words
+    were joined. Matching itself ignores them.
+    """
     base = normalize_base(text)
     for pattern, token in _ALIAS_PATTERNS:
         base = pattern.sub(f" {token} ", base)
     tokens: list[str] = []
     for raw in base.split():
-        if raw in STOPWORDS or raw in FILLER_TOKENS or raw.isdigit():
+        if raw.isdigit():
             continue
         if raw.startswith(_SENTINEL):
             tokens.append(raw)
             continue
+        if raw in {"and", "or"} and keep_joins:
+            tokens.append(raw)
+            continue
+        if raw in STOPWORDS or raw in FILLER_TOKENS:
+            continue
         tokens.append(stem(raw))
     return tokens
+
+
+def tokenize(text: str) -> list[str]:
+    """Canonical tokens for one requirement or one CV line."""
+    return aliased_tokens(text)
+
+
+def and_pairs(text: str) -> list[tuple[str, str]]:
+    """Content words joined by ``and``, in canonical form."""
+    tokens = aliased_tokens(text, keep_joins=True)
+    pairs: list[tuple[str, str]] = []
+    for index, token in enumerate(tokens):
+        if token != "and" or index == 0 or index + 1 >= len(tokens):
+            continue
+        left, right = tokens[index - 1], tokens[index + 1]
+        if left in {"and", "or"} or right in {"and", "or"}:
+            continue
+        pairs.append((left, right))
+    return pairs
 
 
 def token_set(text: str) -> set[str]:

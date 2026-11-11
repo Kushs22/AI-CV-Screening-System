@@ -42,7 +42,59 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _join_wrapped_lines(text)
     return text.strip()
+
+
+_SECTION_HEADING = re.compile(
+    r"^(work experience|professional experience|employment history|work history|career history|employment|experience|"
+    r"education|qualifications|academic qualifications|academic background|"
+    r"skills|technical skills|core skills|key skills|core competencies|competencies|expertise|it skills|tools|"
+    r"summary|professional summary|profile|personal profile|personal statement|objective|about me|"
+    r"certifications?|certificates|licen[cs]es|training|"
+    r"projects|personal projects|selected projects|"
+    r"volunteering|volunteer experience|voluntary work)$",
+    re.I,
+)
+
+
+def _join_wrapped_lines(text: str) -> str:
+    """Join a visual line wrap back onto its bullet.
+
+    A PDF often breaks one bullet after a comma, so ``health and`` and
+    ``safety`` land on different lines. A continuation starts with a
+    lowercase word. A heading or a finished sentence does not.
+    """
+    lines = text.split("\n")
+    joined: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            joined.append("")
+            continue
+        if joined and joined[-1] and _is_wrapped_continuation(joined[-1], stripped):
+            joined[-1] = f"{joined[-1]} {stripped}"
+        else:
+            joined.append(stripped)
+    return "\n".join(joined)
+
+
+def _is_wrapped_continuation(previous: str, line: str) -> bool:
+    if re.match(r"^([-*•●]|\d+[.)])\s+", line):
+        return False
+    if not line[:1].islower():
+        return False
+    heading = previous.strip(" :|-").strip()
+    if (
+        heading
+        and len(heading) <= 40
+        and len(heading.split()) <= 4
+        and _SECTION_HEADING.match(heading)
+    ):
+        return False
+    if previous.rstrip().endswith((".", "!", "?")):
+        return False
+    return True
 
 
 def _extract_pdf(path: Path) -> str:

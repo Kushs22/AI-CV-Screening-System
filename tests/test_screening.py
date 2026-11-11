@@ -505,6 +505,227 @@ def test_right_aligned_dates_are_not_treated_as_a_second_column():
     assert _column_split(words) is None
 
 
+def test_a_lowercase_skill_list_is_not_treated_as_experience():
+    text = clean_text_for_test()
+    assert "\n" in text
+    assert text.splitlines()[0] == "Skills"
+
+
+def clean_text_for_test() -> str:
+    from src.resume_parser import clean_text
+
+    return clean_text("Skills\ncommunication, problem solving, teamwork\n")
+
+
+def test_partial_duty_names_the_missing_words():
+    cv = """
+    Ava Cole is a retail assistant in Bristol and is available for weekday shifts throughout the year.
+    Experience
+    Retail assistant, Bristol
+    January 2023 - June 2024
+    Served customers in a friendly and professional manner during busy trading periods on the shop floor.
+    """
+    result = screen_text(
+        cv,
+        "Required:\n- serve food and beverages to guests in a friendly and professional manner\n",
+    )
+    item = result.results[0]
+    assert item.status == "partial"
+    assert "food" in item.advice.lower()
+    assert "beverage" in item.advice.lower()
+    assert "add a line" in item.advice.lower()
+
+
+def test_missing_requirement_says_what_to_add():
+    result = screen_text(SOFTWARE_CV, NURSE_JD)
+    item = _item(result, "medication")
+    assert item.status == "missing"
+    assert "medication" in item.advice.lower()
+    assert item.advice.lower().startswith("not in the cv")
+
+
+def test_a_wrapped_line_still_matches_health_and_safety():
+    cv = """
+    Experience
+    Support worker
+    March 2023 - May 2024
+    Completed mandatory training including safeguarding, manual handling, and health and
+    safety procedures on every shift.
+    """
+    result = screen_text(cv, "Required:\n- comply with health and safety regulations\n")
+    assert _status(result, "health and safety") == "met"
+
+
+def test_named_degrees_do_not_match_a_different_subject():
+    law = """
+    Amira Shah completed a training seat in a commercial firm and kept a full caseload of matters.
+    Education
+    LLB Law, a qualifying law degree
+    Experience
+    Trainee solicitor from 2021 until 2024, attending court and preparing bundles for counsel.
+    """
+    computer = """
+    Priya Shah builds internal tools for a software team and supports the release process each week.
+    Education
+    BSc Computer Science
+    Experience
+    Built services from 2021 until 2024 and maintained the deployment scripts for the platform.
+    """
+    jd = "Essential:\n- qualifying law degree\n"
+    assert _status(screen_text(law, jd), "law") == "met"
+    assert _status(screen_text(computer, jd), "law") == "missing"
+
+
+def test_each_field_matches_its_own_work_and_not_another_field():
+    psychology_cv = """
+    Experience
+    Assistant Psychologist, Community Team
+    September 2021 - August 2025
+    Delivered cognitive behavioural therapy sessions each week.
+    Completed a risk assessment before every appointment.
+    Wrote clinical notes after each contact.
+    Education
+    BPS accredited psychology degree
+    """
+    psychology_jd = """
+    Assistant Psychologist
+    Essential:
+    - cognitive behavioural therapy
+    - risk assessment
+    - clinical notes
+    - BPS accredited psychology degree
+    """
+    law_cv = """
+    Experience
+    Paralegal, City Firm
+    June 2020 - May 2024
+    Legal research for three commercial disputes.
+    Drafting contracts for supplier agreements.
+    Client interviews before each hearing.
+    Education
+    Qualifying law degree
+    """
+    law_jd = """
+    Paralegal
+    Essential:
+    - legal research
+    - drafting contracts
+    - client interviews
+    - qualifying law degree
+    """
+    engineering_cv = """
+    Experience
+    Mechanical Design Engineer
+    January 2018 - December 2024
+    Produced technical drawings in CAD for gearbox housings.
+    Tolerance analysis on each mating face.
+    Design for manufacture reviews with the machine shop.
+    """
+    engineering_jd = """
+    Mechanical design engineer
+    Essential:
+    - CAD
+    - tolerance analysis
+    - design for manufacture
+    - technical drawings
+    """
+    finance_cv = """
+    Experience
+    Financial Analyst
+    April 2019 - March 2025
+    Built the financial modelling for the quarterly forecast.
+    Variance analysis against the management accounts.
+    Used Excel to prepare the board pack.
+    """
+    finance_jd = """
+    Financial analyst
+    Essential:
+    - financial modelling
+    - variance analysis
+    - management accounts
+    - Excel
+    """
+    business_cv = """
+    Experience
+    Business Analyst
+    February 2019 - January 2025
+    Requirements gathering with the operations managers.
+    Process mapping of the order-to-cash flow.
+    Ran stakeholder workshops and wrote the user stories.
+    """
+    business_jd = """
+    Business analyst
+    Essential:
+    - requirements gathering
+    - process mapping
+    - stakeholder workshops
+    - user stories
+    """
+    computer_cv = """
+    Experience
+    Software Engineer
+    January 2018 - December 2024
+    Wrote Python services and covered data structures in the design notes.
+    Unit testing on every module.
+    Published REST APIs for the billing service.
+    """
+    computer_jd = """
+    Software engineer
+    Essential:
+    - Python
+    - data structures
+    - unit testing
+    - REST APIs
+    """
+    own = [
+        (psychology_cv, psychology_jd, "cognitive"),
+        (law_cv, law_jd, "drafting"),
+        (engineering_cv, engineering_jd, "tolerance"),
+        (finance_cv, finance_jd, "variance"),
+        (business_cv, business_jd, "process mapping"),
+        (computer_cv, computer_jd, "unit testing"),
+    ]
+    for cv, jd, fragment in own:
+        result = screen_text(cv, jd)
+        assert result.verdict in {"Strong match", "Good match"}, (fragment, result.verdict, result.fit_score)
+        assert _status(result, fragment) == "met"
+    assert screen_text(psychology_cv, law_jd).verdict == "Weak match"
+    assert screen_text(computer_cv, psychology_jd).verdict == "Weak match"
+    assert screen_text(finance_cv, engineering_jd).verdict == "Weak match"
+    assert _status(screen_text(law_cv, finance_jd), "variance") == "missing"
+
+
+def test_company_copy_is_not_scored_as_a_cv_requirement():
+    job = """
+    About UsSAH Diagnostics is a growing healthcare provider dedicated to delivering high-quality diagnostic services.
+    We pride ourselves on compassionate patient care and professional excellence.
+    roleWe are building an AI skin cancer classification model.
+    Part-time hours possible.
+    What you will do
+    Train and fine-tune deep-learning classifiers on multi-view image sets.
+    Find which images and combinations work best (each view alone and combined).
+    Measure sensitivity, specificity, PPV, and calibration.
+    You have the right to work in the UK. We cannot offer visa sponsorship.
+    It helps if you have
+    A deep-learning project on skin lesion images.
+    """
+    requirements = parse_job_description(job)
+    blob = " | ".join(item.text.lower() for item in requirements)
+    assert "about us" not in blob
+    assert "pride" not in blob
+    assert "part-time" not in blob
+    assert "visa" not in blob
+    assert "right to work" not in blob
+    assert "what you will do" not in blob
+    assert "it helps if you have" not in blob
+    assert "fine-tune" in blob or "fine tune" in blob
+    assert "sensitivity" in blob
+    images = [item.text.lower() for item in requirements if "images" in item.text.lower() and "combinations" in item.text.lower()]
+    assert images
+    project = [item for item in requirements if "deep-learning project" in item.text.lower() or "skin lesion" in item.text.lower()]
+    assert project and project[0].priority == "preferred"
+
+
 def test_a_real_two_column_page_is_split():
     words = []
     for index in range(8):

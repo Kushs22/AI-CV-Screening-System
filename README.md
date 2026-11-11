@@ -6,10 +6,11 @@ It works across fields. A nursing CV, a teaching CV, an electrician’s CV, and 
 
 ## What you get
 
+- An ATS score for the skills and duties in the job. Company description, benefits, hours, and visa policy are left out
 - A verdict: strong, good, partial, or weak match
-- A job-fit score based on how well the required items are supported
 - Every requirement marked met, partial, missing, or unverified
-- The CV line used as evidence
+- The CV line used as evidence, and a plain note on what to add when a line is missing
+- The same report as a Word file or a PDF
 - Years of experience read from employment dates, when the dates can be read
 - Qualification checks, including subject, when the job asks for one
 
@@ -26,7 +27,7 @@ streamlit run app/streamlit_app.py
 
 Open [http://localhost:8501](http://localhost:8501).
 
-Upload a PDF, DOCX, or TXT CV, or paste the text. Paste the job description and choose Analyse CV.
+The page has three steps. Upload a PDF, Word, or text CV, then upload or paste the job description, then choose Analyse. Download the report as Word or PDF.
 
 Score one file from the terminal:
 

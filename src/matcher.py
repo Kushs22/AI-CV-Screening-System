@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from src.jd_parser import Requirement
-from src.textutil import expand_implications, normalize_base, sentinel, tokenize
+from src.textutil import and_pairs, expand_implications, is_sentinel, normalize_base, sentinel, tokenize
 
 
 _HEADINGS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -35,7 +35,10 @@ _HEADINGS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "summary",
-        re.compile(r"^(summary|professional summary|profile|personal statement|objective|about me)$", re.I),
+        re.compile(
+            r"^(summary|professional summary|profile|personal profile|personal statement|objective|about me)$",
+            re.I,
+        ),
     ),
     (
         "certifications",
@@ -101,6 +104,24 @@ _CODE_CONTEXT = re.compile(
     r"\b(programming|developer|language|software|engineer|engineering|coding|backend|framework|golang)\b",
     re.I,
 )
+# Duty wording that does not identify the requirement. Dropped only when a
+# real requirement remains, so "health and safety regulations" is checked as
+# health and safety, while a one-word requirement is left as it is.
+_GENERIC = frozenset(
+    """
+    ensur provid maintain addres creat support contribut every point specific
+    establish environ adherenc regul comp location manner flow journey servic
+    need work includ follow standard area mak tak giv help high wide posit
+    direct clear good great efficient effectiv throughout
+    """.split()
+)
+# "friendly and professional" describes manner. Missing it does not wipe out
+# the duty. "food and beverages" or "kitchen and dining" does.
+_MODIFIERS = frozenset(
+    """
+    friend professional inclusiv safe warm smooth open polit calm
+    """.split()
+)
 
 
 @dataclass
@@ -132,6 +153,7 @@ class RequirementResult:
     match_type: str
     evidence: str
     section: str
+    advice: str = ""
 
 
 @dataclass
@@ -256,8 +278,6 @@ def summarise(results: list[RequirementResult], profile: CvProfile, readable: bo
     decided_required = [item for item in required if item.status != "unverified"]
     required_met = [item for item in decided_required if item.status == "met"]
     preferred_met = [item for item in preferred if item.status == "met"]
-    missing = [item.text for item in required if item.status == "missing"]
-    partial = [item.text for item in required if item.status == "partial"]
     listed_only = [
         item.text
         for item in required_met
@@ -269,24 +289,29 @@ def summarise(results: list[RequirementResult], profile: CvProfile, readable: bo
 
     if decided_required:
         parts = [
-            f"{len(required_met)} of {len(decided_required)} required items are supported by the CV."
+            f"ATS score {fit}%. {len(required_met)} of {len(decided_required)} required skills are supported by the CV."
         ]
     elif unverified:
         parts = ["The required items could not be verified from the CV text."]
     else:
         parts = ["This job description has no required items, only preferences."]
-    if missing:
-        parts.append("Missing: " + "; ".join(missing[:6]) + ".")
-    if partial:
-        parts.append("Only partly supported: " + "; ".join(partial[:4]) + ".")
-    if unverified:
-        parts.append("Could not verify: " + "; ".join(item.text for item in unverified) + ".")
-    if listed_only:
+    gaps = [
+        item
+        for item in required
+        if item.status in {"missing", "partial", "unverified"} and item.advice
+    ]
+    if gaps:
+        parts.append("What is missing, and what to add:")
+        for item in gaps:
+            parts.append(f"{item.text} — {item.advice}")
+    elif listed_only:
         parts.append(
-            "Listed but not described in experience: " + "; ".join(listed_only[:4]) + "."
+            "These are only in a list, so describe them in a role: "
+            + "; ".join(listed_only[:4])
+            + "."
         )
     parts.append(
-        "A requirement is met only when one CV line contains evidence for it. "
+        "A requirement is met only when one line of the CV shows it. "
         "This is an evidence score for shortlisting, not a hiring decision."
     )
     return ScreenResult(
@@ -342,21 +367,20 @@ def _assess_one(requirement: Requirement, profile: CvProfile) -> RequirementResu
 def _assess_skill(requirement: Requirement, profile: CvProfile) -> RequirementResult:
     best_strength = 0.0
     best_span: Span | None = None
-    best_full = False
+    best_ratio = 0.0
     alternatives = _prepare_alternatives(requirement)
     for span in profile.spans:
         span_tokens = expand_implications(span.text, set(tokenize(span.text)))
         span_tokens = _apply_ambiguous(span, span_tokens)
-        for alternative in alternatives:
-            ratio = _overlap(alternative, span_tokens)
+        for phrase, alternative in alternatives:
+            ratio = _overlap(alternative, span_tokens, and_pairs(phrase))
             if ratio <= 0:
                 continue
-            full = ratio == 1
-            strength = _strength(full, span.demonstrated)
+            strength = _strength(ratio, span.demonstrated)
             if strength > best_strength:
                 best_strength = strength
                 best_span = span
-                best_full = full
+                best_ratio = ratio
     if best_span is None or best_strength <= 0:
         return RequirementResult(
             text=requirement.text,
@@ -367,23 +391,29 @@ def _assess_skill(requirement: Requirement, profile: CvProfile) -> RequirementRe
             match_type="Not found",
             evidence="",
             section="",
+            advice=f"Not in the CV. Add a line that shows: {requirement.text}.",
         )
     status = "met" if best_strength >= 0.85 else "partial"
+    evidence = best_span.text.strip()[:280]
     return RequirementResult(
         text=requirement.text,
         priority=requirement.priority,
         kind=requirement.kind,
         status=status,
-        strength=best_strength,
-        match_type=_wording(requirement.text, best_span.text, best_full),
-        evidence=best_span.text.strip()[:280],
+        strength=round(best_strength, 2),
+        match_type=_wording(requirement.text, best_span.text, best_ratio >= 0.999),
+        evidence=evidence,
         section=best_span.section,
+        advice=_advice(requirement.text, status, evidence, best_span.section),
     )
 
 
-def _prepare_alternatives(requirement: Requirement) -> list[set[str]]:
+def _prepare_alternatives(requirement: Requirement) -> list[tuple[str, set[str]]]:
+    phrases = requirement.phrases or [requirement.text] * len(requirement.alternatives)
+    if len(phrases) != len(requirement.alternatives):
+        phrases = [requirement.text] * len(requirement.alternatives)
     prepared = []
-    for alternative in requirement.alternatives:
+    for phrase, alternative in zip(phrases, requirement.alternatives):
         tokens = set(alternative)
         if tokens == {"go"}:
             tokens = {sentinel("go")}
@@ -391,7 +421,7 @@ def _prepare_alternatives(requirement: Requirement) -> list[set[str]]:
             tokens = {sentinel("r")}
         elif tokens == {"c"}:
             tokens = {sentinel("c")}
-        prepared.append(tokens)
+        prepared.append((phrase, tokens))
     return prepared
 
 
@@ -412,26 +442,102 @@ def _apply_ambiguous(span: Span, tokens: set[str]) -> set[str]:
     return updated
 
 
-def _overlap(required: set[str], found: set[str]) -> float:
-    if not required:
+def _overlap(required: set[str], found: set[str], pairs: list[tuple[str, str]] | None = None) -> float:
+    content = _content_tokens(required)
+    if not content:
         return 0.0
-    shared = len(required & found)
-    ratio = shared / len(required)
-    if required <= found:
-        return 1.0
-    if len(required) >= 3 and shared >= 2 and ratio >= 0.67:
-        return ratio
-    return 0.0
+    found_content = {token for token in found if token not in _GENERIC} or set(found)
+    if content <= found_content or content <= found:
+        ratio = 1.0
+    else:
+        shared = len(content & found_content)
+        ratio = shared / len(content)
+        if len(content) <= 2:
+            return 0.0
+        if len(content) == 3 and not (shared >= 2 and ratio >= 0.67):
+            return 0.0
+        if len(content) >= 4 and not (shared >= 2 and ratio >= 0.28):
+            return 0.0
+    return _cap_missing_pairs(pairs or [], found, ratio)
 
 
-def _strength(full: bool, demonstrated: bool) -> float:
-    if full and demonstrated:
-        return 1.0
-    if full:
-        return 0.9
+def _content_tokens(required: set[str]) -> set[str]:
+    """Drop duty filler when a specific requirement is still left."""
+    content = {token for token in required if token not in _GENERIC}
+    if len(content) >= 2:
+        return content
+    if len(content) == 1 and is_sentinel(next(iter(content))) and len(required) >= 3:
+        return content
+    return set(required)
+
+
+def _cap_missing_pairs(pairs: list[tuple[str, str]], found: set[str], ratio: float) -> float:
+    """A missing noun pair such as food and beverages limits the score."""
+    for left, right in pairs:
+        if left in _GENERIC or right in _GENERIC:
+            continue
+        if left in _MODIFIERS and right in _MODIFIERS:
+            continue
+        if left in found and right in found:
+            continue
+        ratio = min(ratio, 0.4)
+    return ratio
+
+
+def _strength(ratio: float, demonstrated: bool) -> float:
+    if ratio >= 0.999:
+        return 1.0 if demonstrated else 0.9
     if demonstrated:
-        return 0.6
-    return 0.5
+        return ratio
+    return ratio * 0.9
+
+
+_JOINERS = {"and", "or", "of", "for", "with", "to", "in", "on"}
+_LEVEL_WORD = re.compile(
+    r"^(ph\.?d|dphil|doctorate|masters?|master'?s|msc|m\.sc|mba|meng|m\.?a|bachelors?|bachelor'?s|bsc|b\.sc|beng|b\.?a|degree|hnd|nvq|gcse|a[- ]levels?)$",
+    re.I,
+)
+
+
+def _advice(text: str, status: str, evidence: str, section: str) -> str:
+    if status == "met" and section in {"skills", "certifications"}:
+        return "Only listed, not shown in a role. Add a bullet under experience that describes this."
+    if status == "met":
+        return ""
+    if status == "missing" or not evidence:
+        return f"Not in the CV. Add a line that shows: {text}."
+    missing = _missing_surface(text, evidence)
+    if missing:
+        return f"Still missing: {missing}. Add a line that shows: {missing}."
+    return f"Only partly shown. Add a line that shows: {text}."
+
+
+def _missing_surface(text: str, evidence: str) -> str:
+    evidence_tokens = expand_implications(evidence, set(tokenize(evidence)))
+    words = text.replace("–", " ").replace("—", " ").replace("/", " ").split()
+    keep: list[bool] = []
+    for word in words:
+        cleaned = word.strip(".,;:()[]")
+        tokens = [token for token in tokenize(cleaned) if token not in _GENERIC]
+        keep.append(bool(tokens) and any(token not in evidence_tokens for token in tokens))
+    chosen: list[str] = []
+    for index, word in enumerate(words):
+        bare = word.strip(".,;:()[]")
+        if not bare:
+            continue
+        if keep[index]:
+            chosen.append(bare)
+        elif bare.lower() in _JOINERS and _between_kept(keep, index):
+            chosen.append(bare.lower())
+    while chosen and chosen[0].lower() in _JOINERS:
+        chosen.pop(0)
+    while chosen and chosen[-1].lower() in _JOINERS:
+        chosen.pop()
+    return " ".join(chosen)
+
+
+def _between_kept(keep: list[bool], index: int) -> bool:
+    return any(keep[max(0, index - 4) : index]) and any(keep[index + 1 : index + 5])
 
 
 def _wording(requirement: str, evidence: str, full: bool) -> str:
@@ -457,6 +563,7 @@ def _assess_years(requirement: Requirement, profile: CvProfile) -> RequirementRe
             match_type="Dates not found",
             evidence="No readable employment dates, so years of experience were not scored.",
             section="experience",
+            advice="No employment dates were read. Add a start and end date for each role.",
         )
     met = found + 0.25 >= needed
     return RequirementResult(
@@ -468,22 +575,27 @@ def _assess_years(requirement: Requirement, profile: CvProfile) -> RequirementRe
         match_type="Years found",
         evidence=f"About {found:.1f} years read from employment dates.",
         section="experience",
+        advice=""
+        if met
+        else (
+            f"Dates show about {found:.1f} years. The job asks for {needed}. "
+            "Add earlier roles with dates if that experience exists."
+        ),
     )
 
 
 def _assess_education(requirement: Requirement, profile: CvProfile) -> RequirementResult:
     level_ok = profile.education_level >= (requirement.education_level or 1)
+    blob_tokens: set[str] = set()
+    for span in profile.spans:
+        if span.section in {"education", "certifications", "other"}:
+            blob_tokens |= set(tokenize(span.text))
     field_ok = True
     if requirement.education_field:
-        education_lines = [
-            span.text
-            for span in profile.spans
-            if span.section in {"education", "certifications", "other"}
-        ]
-        blob_tokens: set[str] = set()
-        for line in education_lines:
-            blob_tokens |= set(tokenize(line))
         field_ok = set(requirement.education_field) <= blob_tokens
+    subject = _subject_tokens(requirement.text)
+    if subject and not subject <= blob_tokens:
+        field_ok = False
     if level_ok and field_ok:
         status, strength, match_type = "met", 1.0, "Qualification"
     else:
@@ -497,6 +609,15 @@ def _assess_education(requirement: Requirement, profile: CvProfile) -> Requireme
         quote = (quote + " " if quote else "") + "The qualification is in a different subject."
     if not quote:
         quote = f"Highest qualification level read from the CV: {profile.education_level or 'none'}."
+    if status == "met":
+        advice = ""
+    elif requirement.education_field and level_ok and not field_ok:
+        advice = (
+            f"The qualification is in a different subject. "
+            f"Add this if you hold it: {requirement.text}."
+        )
+    else:
+        advice = f"Not in the CV. Add this qualification if you hold it: {requirement.text}."
     return RequirementResult(
         text=requirement.text,
         priority=requirement.priority,
@@ -506,7 +627,20 @@ def _assess_education(requirement: Requirement, profile: CvProfile) -> Requireme
         match_type=match_type,
         evidence=quote,
         section="education",
+        advice=advice,
     )
+
+
+def _subject_tokens(text: str) -> set[str]:
+    """Words that name the subject, once the degree level itself is removed."""
+    tokens: set[str] = set()
+    for word in re.findall(r"[A-Za-z0-9+#.]+", text):
+        if _LEVEL_WORD.match(word):
+            continue
+        for token in tokenize(word):
+            if token not in _GENERIC and len(token) > 1:
+                tokens.add(token)
+    return tokens
 
 
 def _label_lines(text: str) -> list[tuple[str, str]]:

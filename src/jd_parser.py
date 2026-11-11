@@ -86,7 +86,8 @@ class Requirement:
     text: str
     priority: str
     kind: str = "skill"
-    alternatives: list[frozenset[str]] = field(default_factory=list)
+    alternatives: list[tuple[str, ...]] = field(default_factory=list)
+    phrases: list[str] = field(default_factory=list)
     years: int | None = None
     education_level: int | None = None
     education_level_name: str = ""
@@ -95,6 +96,7 @@ class Requirement:
 
 def parse_job_description(job_description: str) -> list[Requirement]:
     text = job_description.replace("\u00a0", " ").strip()
+    text = _split_glued_headings(text)
     if not text:
         return []
 
@@ -135,14 +137,108 @@ def parse_job_description(job_description: str) -> list[Requirement]:
     return requirements
 
 
+_GLUED_HEADINGS = (
+    "about the company",
+    "about the organisation",
+    "about the organization",
+    "about the team",
+    "about us",
+    "what we offer",
+    "what you will do",
+    "what you'll do",
+    "what you will need",
+    "what you'll need",
+    "it helps if you have",
+    "who we are",
+    "who you are",
+    "how to apply",
+    "the role",
+    "your role",
+    "key responsibilities",
+    "person specification",
+)
+
+# Company description, pay, hours, and hiring policy are not CV content.
+_NOT_A_CV_REQUIREMENT = re.compile(
+    r"("
+    r"\bwe(?:'re| are) (?:a|an|committed|dedicated|proud)\b"
+    r"|\bwe (?:pride|offer|cannot|can't|do not|don't|provide|welcome)\b"
+    r"|dedicated to delivering"
+    r"|\bis a (?:growing|leading|global|dynamic)\b"
+    r"|\b(?:part-time|full-time)\b.{0,40}\b(?:hours|role|position|contract|possible|available)\b"
+    r"|competitive (?:salary|pay|package)|pension scheme"
+    r"|visa sponsorship|sponsor (?:a )?visa|right to work"
+    r"|equal opportunit"
+    r")",
+    re.I,
+)
+
+_SECTION_HEADINGS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "skip",
+        re.compile(
+            r"^(about us|about the (?:company|organisation|organization|team)|who we are|"
+            r"our (?:story|mission|values)|what we offer|why (?:join|work)(?: with)? us|"
+            r"benefits|perks|salary|how to apply|equal opportunities)$",
+            re.I,
+        ),
+    ),
+    (
+        "preferred",
+        re.compile(
+            r"^(it helps if you have|desirable|nice to have|preferred|bonus)$",
+            re.I,
+        ),
+    ),
+    (
+        "required",
+        re.compile(
+            r"^(what you will do|what you'll do|the role|your role|role|"
+            r"key duties|duties|responsibilities|key responsibilities|"
+            r"requirements|what you(?:'ll| will) need|who you are|about you|"
+            r"essential|person specification|qualifications)$",
+            re.I,
+        ),
+    ),
+)
+
+
+def _split_glued_headings(text: str) -> str:
+    """Put a heading back on its own line when a PDF joins it to the next word."""
+    for heading in sorted(_GLUED_HEADINGS, key=len, reverse=True):
+        text = re.sub(
+            rf"(?i)({re.escape(heading)})(?=[A-Za-z])",
+            r"\1\n",
+            text,
+        )
+    text = re.sub(r"(?i)(?<![A-Za-z])(role)(?=[A-Z])", r"\1\n", text)
+    return text
+
+
+def _section_heading(line: str) -> tuple[str, str] | None:
+    candidate = line.strip(" :|-")
+    for kind, pattern in _SECTION_HEADINGS:
+        if pattern.match(candidate):
+            return kind, ""
+    return None
+
+
 def _sentences(text: str, mode: str):
     opening_line = True
+    section = mode
     for raw_line in text.splitlines():
         original = raw_line.strip()
         if not original:
             continue
         is_bullet = bool(re.match(r"^([-*•●]|\d+[.)])\s+", original))
         line = re.sub(r"^([-*•●]|\d+[.)])\s+", "", original)
+        heading = _section_heading(line)
+        if heading:
+            section, line = heading
+            if not line:
+                continue
+        if section == "skip" or _NOT_A_CV_REQUIREMENT.search(line):
+            continue
         if ":" in line:
             head, rest = line.split(":", 1)
             head = head.strip()
@@ -168,8 +264,9 @@ def _sentences(text: str, mode: str):
         pieces = re.split(r"(?<=[.!?])\s+", line)
         for piece in pieces:
             piece = piece.strip(" \t-•")
-            if piece:
-                yield piece, _priority(piece, mode)
+            if piece and not _NOT_A_CV_REQUIREMENT.search(piece):
+                piece_mode = "preferred" if section == "preferred" else mode
+                yield piece, _priority(piece, piece_mode)
 
 
 def _is_job_title(line: str, is_bullet: bool) -> bool:
@@ -205,8 +302,8 @@ def _explode(sentence: str) -> list[tuple[str, list[str]]]:
     if not cleaned:
         return []
     protected, slots = _protect(cleaned)
-    if _is_list(protected):
-        parts = re.split(r";|,|\band\b|&", protected)
+    if _is_skill_list(protected):
+        parts = re.split(r";|,", protected)
     else:
         parts = [protected]
     exploded: list[tuple[str, list[str]]] = []
@@ -246,6 +343,16 @@ def _clean_part(text: str) -> str:
                 text = updated
                 changed = True
         updated = re.sub(
+            r"^(as well as|along with)\s+",
+            "",
+            text,
+            count=1,
+            flags=re.I,
+        ).strip()
+        if updated != text:
+            text = updated
+            changed = True
+        updated = re.sub(
             r"^(and|or|with|the|in)\s+",
             "",
             text,
@@ -268,8 +375,15 @@ def _clean_part(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _is_list(text: str) -> bool:
-    return text.count(",") >= 1 or text.count(";") >= 1
+def _is_skill_list(text: str) -> bool:
+    """Split a comma list of skills, and leave a prose duty as one item."""
+    if text.count(";") >= 1:
+        return True
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if len(parts) < 3:
+        return False
+    short = [part for part in parts if len(part.split()) <= 8]
+    return len(short) >= len(parts) - 1
 
 
 def _split_or(part: str) -> list[str]:
@@ -277,6 +391,10 @@ def _split_or(part: str) -> list[str]:
         return [part]
     left, right = re.split(r"\bor\b", part, maxsplit=1, flags=re.I)
     left, right = left.strip(), right.strip()
+    # "concerns or issues in a long duty" is one requirement.
+    # "client or stakeholder requirements" is two parallel alternatives.
+    if len(left.split()) > 4 or len(right.split()) > 4:
+        return [part]
     left_words, right_words = left.split(), right.split()
     if len(left_words) == 1 and len(right_words) >= 2:
         left = f"{left} {right_words[-1]}"
@@ -307,6 +425,8 @@ def _restore(text: str, slots: dict[str, str]) -> str:
 def _keep(text: str) -> bool:
     if not text or not re.search(r"[A-Za-z+#]", text):
         return False
+    if _NOT_A_CV_REQUIREMENT.search(text) or _section_heading(text):
+        return False
     if tokenize(text):
         return True
     return bool(re.search(r"\b(c\+\+|c#|r|go|ai|ml|ui|ux|sql|js|rn)\b", text, re.I))
@@ -330,10 +450,12 @@ def _build(display: str, alternatives: list[str], priority: str) -> Requirement 
         )
 
     token_sets = []
+    phrases = []
     for alternative in alternatives:
-        tokens = frozenset(tokenize(alternative))
+        tokens = tuple(dict.fromkeys(tokenize(alternative)))
         if tokens:
             token_sets.append(tokens)
+            phrases.append(alternative)
     if not token_sets:
         return None
     # Prefer the richer wording when every alternative collapsed together.
@@ -342,6 +464,7 @@ def _build(display: str, alternatives: list[str], priority: str) -> Requirement 
         priority=priority,
         kind="skill",
         alternatives=token_sets,
+        phrases=phrases,
     )
 
 

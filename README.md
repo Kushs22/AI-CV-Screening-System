@@ -18,6 +18,22 @@ A list of skills with no experience behind it can score as a good match. It does
 
 This is a shortlisting aid. It is not a hiring decision, and it does not predict one employer’s applicant tracking system.
 
+## Live app
+
+Deploy on [Streamlit Community Cloud](https://share.streamlit.io/) from this public repo:
+
+1. Open [share.streamlit.io](https://share.streamlit.io/) and sign in with GitHub
+2. Create an app from `Kushs22/AI-CV-Screening-System`, branch `main`, file `app/streamlit_app.py`
+3. In Advanced settings → Secrets, add:
+
+```toml
+NYATA_API_KEY = "your-key"
+```
+
+4. Set the app to public so anyone with the link can use it
+
+Anyone can also run it locally:
+
 ## Run it
 
 ```bash

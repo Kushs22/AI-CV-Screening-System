@@ -3,4 +3,5 @@ pdfplumber>=0.11
 pypdf>=4.0
 python-docx>=1.1
 fpdf2>=2.8
+certifi>=2024.0
 pytest>=8.0

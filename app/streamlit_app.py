@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.nyata_guide import ask_both
 from src.report import DISCLAIMER, build_docx, build_pdf, split_findings
 from src.resume_parser import extract_text
 from src.screen import screen_text
@@ -67,10 +68,13 @@ def _reset() -> None:
         "screen_result",
         "cv_file",
         "job_file",
+        "nyata_answers",
+        "nyata_question_used",
     ):
         st.session_state.pop(key, None)
     st.session_state["cv_paste"] = ""
     st.session_state["job_paste"] = ""
+    st.session_state["nyata_question"] = ""
     st.session_state["step"] = 1
     st.session_state["form_error"] = ""
 
@@ -227,6 +231,76 @@ def _show_result(result) -> None:
             st.text(profile.text or "No text could be extracted.")
 
     st.info(DISCLAIMER)
+    _show_nyata()
+
+
+def _nyata_api_key() -> str:
+    key = os.environ.get("NYATA_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        return str(st.secrets["NYATA_API_KEY"]).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _show_nyata() -> None:
+    st.subheader("Where to go next")
+    st.write("Looking for jobs related to your field or CV? Find jobs using Nyata.")
+    if "nyata_question" not in st.session_state:
+        st.session_state["nyata_question"] = ""
+    st.text_input(
+        "Your question",
+        key="nyata_question",
+        placeholder="Where can I find jobs related to my CV?",
+        label_visibility="collapsed",
+    )
+    key = _nyata_api_key()
+    if not key:
+        st.warning("Add the Nyata API key to load these answers.")
+        return
+
+    question = (st.session_state.get("nyata_question") or "").strip()
+    if st.button("Ask Nyata", type="primary", disabled=not question):
+        with st.spinner("Asking Nyata…"):
+            st.session_state["nyata_answers"] = ask_both(key, question)
+
+    answers = st.session_state.get("nyata_answers")
+    if not answers:
+        return
+    for item in answers:
+        links = item.get("links") or []
+        reply = (item.get("reply") or "").strip()
+        listings = item.get("listings") or []
+        if not links and not reply and not listings and item.get("ok"):
+            continue
+        st.markdown(f"**{item['title']}**")
+        if links:
+            for link in links:
+                st.link_button(link["name"], link["url"])
+        if not item.get("ok"):
+            st.write("Nyata could not answer this question just now.")
+            continue
+        if reply:
+            st.write(reply)
+        for place in listings:
+            line = place["name"]
+            if place.get("organisation"):
+                line = f"{line} — {place['organisation']}"
+            st.write(line)
+            detail = ", ".join(
+                part
+                for part in (place.get("address"), place.get("postcode"), place.get("when"))
+                if part
+            )
+            if place.get("distance_km") is not None:
+                detail = f"{detail}, {place['distance_km']:.1f} km away".strip(", ")
+            if place.get("open_now"):
+                detail = f"{detail} · Open now".strip(" ·")
+            if detail:
+                st.caption(detail)
+            if place.get("directions_url"):
+                st.link_button("Directions", place["directions_url"])
 
 
 st.set_page_config(page_title="AI CV Screening", layout="wide")
